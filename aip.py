@@ -11,7 +11,7 @@ from matplotlib.font_manager import FontProperties
 def log_of_aip(data, n, money):
     """
     data：测试数据集，即指数历史走势数据
-    n：定投周期，6个月的整数倍，如n=1代表定投6个月（能否改成月？
+    n：定投周期，6个月的整数倍，如n=1代表定投6个月，后面可以改成月
     money：定投金额
     """
 
@@ -24,75 +24,81 @@ def log_of_aip(data, n, money):
     # pandas 所有的 string 类型的 column 都为 object 类型
     data['date'] = data['trade_date'].apply(lambda x: datetime.strptime(x, '%Y%m%d'))
     data['date'] = pd.to_datetime(data['date'])  # 将 object 类型的日期转换成 datetime64 类型，就可以对日期进行取值了
-    print(data)
+    data['year'] = data['date'].map(lambda x: x.year)  # 这样获取年份比循环高效许多，datetime64 类型的日期可以这样获取年月
+    # print(data)
 
     # DataFrame.set_index(keys, drop=True, append=False, inplace=False, verify_integrity=False) 设置索引
     # DataFrame.sort_index(axis=0, by=None, ascending=True) by 参数的作用是针对某一（些）列进行排序（不能对行使用 by 参数）
     data = data.set_index('date').sort_index()
-    print(data.loc[:'2015-01-10']) # 对索引进行排序，之后就可以进行范围切片了
+    # print(data.loc[:'2015-01-10']) # 对索引进行排序，之后就可以进行范围切片了
 
     # 假设余额宝的年化收益率为 4%
     data['余额宝利率'] = (4.0 / 100 + 1) ** (1.0 / 250) - 1  # ** 乘方
     data['理财收益_净值'] = (data['余额宝利率'] + 1).cumprod()  # comprod 累乘，comsum 累加
+    # print(data)
 
     # 选择每个月的第一个交易日进行定投
-    trading_day = data.resample('M', kind='date').first()  # Pandas 中的 resample 函数可以完成日期的聚合工作，这里是按月聚合
+    # resample 函数可以进行重采样，这里是每月取出第一条记录，缺失值用前一天的数据代替（上月末），但是 date 是错的，显示的是月末日期，可以只看月份
+    trading_day = data.resample('M', kind='date').first()
+    # print(trading_day)
 
     # 确定循环次数，因为得保证满足定投周期
-    try:
-        All_Sales = pd.DataFrame()
-        for i in range(len(trading_day) - (6 * n)):
-            # 在定投周期结束后一个月卖出
-            trading_cycle = trading_day.iloc[i:i + 6 * n + 1]  # iloc 通过行号获取行数据，不能是字符，ix 既可以用行号也可以用行字符
+    # try:
+    All_Sales = pd.DataFrame()
+    for i in range(len(trading_day) - (6 * n)):
+        # 在定投周期结束后一个月卖出
+        trading_cycle = trading_day.iloc[i:i + 6 * n + 1]  # iloc 通过行号获取行数据，不能是字符，ix 既可以用行号也可以用行字符
 
-            # 计算卖出点下个月的指数均值
-            in_month = data[data['trade_month'] == list(trading_cycle['trade_month'][-1:])[0]]
-            # 透视表 pivot_table 根据一个键或多个键做数据聚合，计算分组平均数，这里是根据 trade_month 计算 open 的分组平均值
-            # mean() 平均值，values() 返回 dict 中的值
-            sales_point = in_month.pivot_table(values='open', index='trade_month').mean().values[0]
+        # 计算卖出点下个月的指数均值
+        in_month = data[data['trade_month'] == list(trading_cycle['trade_month'][-1:])[0]]  # == list 相当于 in
+        # 透视表 pivot_table 根据一个键或多个键做数据聚合，这里是根据 trade_month 计算 open 的分组平均值，values() 返回 dict 中的值
+        sales_point = in_month.pivot_table(values='open', index='trade_month').mean().values[0]
+        print(trading_cycle)
 
-            # 定投指数基金
-            AIP = pd.DataFrame(index=trading_cycle.index)
-            AIP['定投金额'] = int(money)
+        # 定投指数基金
+        AIP = pd.DataFrame(index=trading_cycle.index)  # 指定索引
+        AIP['定投金额'] = int(money)
 
-            # 以基金当天的开盘价作为当天买入的价格（基金为什么会有开盘价，查一下
-            AIP['基金价格'] = trading_cycle['open']
-            AIP['购买基金份额'] = AIP['定投金额'] / AIP['基金价格']
-            AIP['累计基金份额'] = AIP['购买基金份额'].cumsum()
+        # 以基金当天净值作为买入的价格
+        AIP['基金价格'] = trading_cycle['open']
+        AIP['购买基金份额'] = AIP['定投金额'] / AIP['基金价格']
+        AIP['累计基金份额'] = AIP['购买基金份额'].cumsum()
 
-            # 定投理财产品
-            AIP['购买理财产品份额'] = AIP['定投金额'] / trading_cycle['理财收益_净值']
-            AIP['累计理财产品份额'] = AIP['购买理财产品份额'].consum()
+        # 定投理财产品
+        AIP['购买理财产品份额'] = AIP['定投金额'] / trading_cycle['理财收益_净值']
+        AIP['累计理财产品份额'] = AIP['购买理财产品份额'].consum()  # 'Series' object has no attribute 'consum'
+        print(AIP)
 
-            # 计算每个交易日的本息（即本金+利息，公式=当天的份额✖当天的基金价格
-            result = pd.concat([trading_cycle, AIP], axis=1)
-            result['基金本息'] = (result['open'] * result['累计基金份额']).astype('int')
-            result['理财本息'] = (result['理财收益_净值'] * result['累计理财产品份额']).astype('int')
+        # 计算每个交易日的本息（即本金+利息，公式=当天的份额✖当天的基金价格
+        result = pd.concat([trading_cycle, AIP], axis=1)
+        result['基金本息'] = (result['open'] * result['累计基金份额']).astype('int')
+        result['理财本息'] = (result['理财收益_净值'] * result['累计理财产品份额']).astype('int')
+        print('result:', result)  # 这里已经没有执行了，在这段之前已经返回了
 
-            # 买入点 result['trade_date'][0]
-            # 定投周期（月） 6*n
-            # 定投投入本金 result['累计定投本金'][-2:-1][0]
-            # 基金卖出后本息 result['累计基金份额'][-2:-1][0] * sales_point
-            # 余额宝卖出后本息 result['理财本息'][-2:-1][0]
+        # 买入点 result['trade_date'][0]
+        # 定投周期（月） 6*n
+        # 定投投入本金 result['累计定投本金'][-2:-1][0]
+        # 基金卖出后本息 result['累计基金份额'][-2:-1][0] * sales_point
+        # 余额宝卖出后本息 result['理财本息'][-2:-1][0]
 
-            # 这里没有考虑交易费，实际上权益类基金卖出的时候会收取赎回费，但是货币基金不需要
+        # 这里没有考虑交易费，实际上权益类基金卖出的时候会收取赎回费，但是货币基金不需要
 
-            Each_sales = pd.DataFrame([[result['trade_date'][0],
-                                        6 * n,
-                                        result['累计定投本金'][-2:-1][0],
-                                        result['累计基金份额'][-2:-1][0] * sales_point,
-                                        result['理财本息'][-2:-1][0]]],
-                                      columns=['买入点', '定投周期（月）', '累计定投本金', '基金卖出后本息', '余额宝卖出后本息'])
+        Each_sales = pd.DataFrame([[result['trade_date'][0],
+                                    6 * n,
+                                    result['累计定投本金'][-2:-1][0],
+                                    result['累计基金份额'][-2:-1][0] * sales_point,
+                                    result['理财本息'][-2:-1][0]]],
+                                    columns=['买入点', '定投周期（月）', '累计定投本金', '基金卖出后本息', '余额宝卖出后本息'])
 
-            Each_sales['基金收益率%'] = 100 * (Each_sales['基金卖出后本息'][0] / Each_sales['累计定投本金'][0] - 1)
-            Each_sales['余额宝收益率%'] = 100 * (Each_sales['余额宝卖出后本息'][0] / Each_sales['累计定投本金'][0] - 1)
-            Each_sales['LikeOrNot'] = Each_sales['基金卖出后本息'] > Each_sales['余额宝卖出后本息']
-            All_Sales = All_Sales.append(Each_sales)
+        Each_sales['基金收益率%'] = 100 * (Each_sales['基金卖出后本息'][0] / Each_sales['累计定投本金'][0] - 1)
+        Each_sales['余额宝收益率%'] = 100 * (Each_sales['余额宝卖出后本息'][0] / Each_sales['累计定投本金'][0] - 1)
+        Each_sales['LikeOrNot'] = Each_sales['基金卖出后本息'] > Each_sales['余额宝卖出后本息']
+        All_Sales = All_Sales.append(Each_sales)
 
-        return All_Sales
+    return All_Sales
 
-    except:
-        print('定投周期大于历史股价走势！请重新设置定投周期。')
+# except:
+#     print('定投周期大于历史股价走势！请重新设置定投周期。')
 
 
 def Rate_of_Like(data, money):
@@ -112,7 +118,6 @@ def Rate_of_Like(data, money):
 
 
 if __name__ == '__main__':
-
     plt.rcParams['figure.figsize'] = (10.0, 4.0)  # 设置 figure_size 尺寸
     plt.rcParams['image.interpolation'] = 'nearest'  # 设置 interpolation style
     plt.rcParams['image.cmap'] = 'gray'  # 设置 颜色 style
