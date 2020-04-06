@@ -32,7 +32,8 @@ def show_txt_words_f1():
 
 # 2、使用 DataFrame 存储词语及其出现次数
 def show_txt_words_f2():
-    txt = open("C:\\Users\\Zero\\Desktop\\tools\\Python数据科学手册_机器学习.md", "r", encoding='utf-8').read()
+    # txt = open("C:\\Users\\Zero\\Desktop\\tools\\Python数据科学手册_机器学习.md", "r", encoding='utf-8').read()  # Windows
+    txt = open("/Users/kinyuchung/Desktop/俯首为臣.txt", "r", encoding='gbk').read()  # MacOS
     words = jieba.lcut(txt)  # 使用精确模式对文本进行分词
     counts = pd.DataFrame(columns=['word', 'count']).set_index('word')
 
@@ -62,6 +63,6 @@ def show_words():
 
 if __name__ == '__main__':
     # show_words()
-    show_txt_words_f1()
+    # show_txt_words_f1()
     show_txt_words_f2()
 
