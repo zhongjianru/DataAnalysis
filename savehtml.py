@@ -4,7 +4,7 @@
 
 # File : taobao.py 
 
-# Purpose: 将网页源代码保存到本地，再进行读取，不需要每次都登陆
+# Purpose: 部分网页可以保存到本地再进行解析，但是相对路径url不能直接访问
 
 import os
 import time
