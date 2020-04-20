@@ -8,7 +8,7 @@
 
 import pandas as pd
 
-file = open('files/region.sql').read()
+file = open('files/region.sql', mode='r', encoding='utf-8').readlines()  # 不用自己分割换行，直接用readlines()
 columns = ['id', 'name', 'pid', 'sname', 'level', 'citycode', 'zipcode', 'mername', 'lng', 'lat', 'phonetic']
 df_region = pd.DataFrame(columns=columns)
 df = pd.DataFrame(columns=columns)
@@ -16,7 +16,7 @@ df = pd.DataFrame(columns=columns)
 # 不能这样写，这样会创建一个df_region到df的引用，df的值改变的话，df_region也会跟着改变，会导致后面数据重复
 cnt = 0
 
-for line in file.split('\n'):
+for line in file:
     if line.find('INSERT') == 0:
         data = line.replace('INSERT INTO `region` VALUES (', '').replace(');', '').replace("'", '').split(', ')
         df.loc[cnt] = data
