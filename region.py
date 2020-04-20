@@ -8,7 +8,7 @@
 
 import pandas as pd
 
-file = open('region.sql').read()
+file = open('files/region.sql').read()
 columns = ['id', 'name', 'pid', 'sname', 'level', 'citycode', 'zipcode', 'mername', 'lng', 'lat', 'phonetic']
 df_region = pd.DataFrame(columns=columns)
 df = pd.DataFrame(columns=columns)
@@ -27,5 +27,5 @@ for line in file.split('\n'):
             print(cnt)
 
 df_region = df_region.append(df)
-df_region.to_excel('region.xls')
+df_region.to_excel('files/region.xls')
 print('write down:', cnt)
