@@ -1,4 +1,6 @@
 # Python机器学习：Sklearn 与 TensorFlow 机器学习实用指南
+# 参考资料：https://github.com/ageron/handson-ml
+# 中文翻译：https://github.com/it-ebooks/hands-on-ml-zh
 # 第二章：加州房价模型
 
 import os
@@ -12,6 +14,15 @@ from pandas.plotting import scatter_matrix
 from six.moves import urllib
 from sklearn.model_selection import train_test_split
 from sklearn.model_selection import StratifiedShuffleSplit
+from sklearn.impute import SimpleImputer as Imputer
+from sklearn.pipeline import Pipeline
+from sklearn.pipeline import FeatureUnion
+from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.preprocessing import LabelBinarizer
+from sklearn.preprocessing import StandardScaler
+
+from sklearn.base import BaseEstimator, TransformerMixin
 
 # 全局变量，大写，函数内变量小写
 DOWNLOAD_ROOT = 'https://raw.githubusercontent.com/ageron/handson-ml/master/'
@@ -144,6 +155,113 @@ def view_housing_data(data):
     plt.show()
 
 
+rooms_ix, bedrooms_ix, population_ix, household_ix = 3, 4, 5, 6
+class CombinedAttributesAdder(BaseEstimator, TransformerMixin):
+
+    def __init__(self, add_bedrooms_per_room=True):  # no *args or **kargs
+        self.add_bedrooms_per_room = add_bedrooms_per_room
+
+    def fit(self, X, y=None):
+        return self  # nothing else to do
+
+    def transform(self, X, y=None):
+        rooms_per_household = X[:, rooms_ix] / X[:, household_ix]
+        population_per_household = X[:, population_ix] / X[:, household_ix]
+        if self.add_bedrooms_per_room:
+            bedrooms_per_room = X[:, bedrooms_ix] / X[:, rooms_ix]
+            return np.c_[X, rooms_per_household, population_per_household, bedrooms_per_room]
+        else:
+            return np.c_[X, rooms_per_household, population_per_household]
+
+
+# 自定义转换器：
+# 通过选择对应的属性（数值或分类）、丢弃其它的，来转换数据，并将输出 DataFrame 转变成一个 NumPy 数组
+class DataFrameSelector(BaseEstimator, TransformerMixin):
+
+    def __init__(self, attribute_names):
+        self.attribute_names = attribute_names
+
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        return X[self.attribute_names].values
+
+
+# 数据清洗
+def trans_housing_data(housing):
+    # 6.0、将预测值和标签分开
+    housing = housing.drop('median_house_value', axis=1)  # drop和fillna等函数中设置inplace=True在原数据上修改，不设置默认不修改，需要赋值给其他变量
+    housing_labels = train_set['median_house_value'].copy()
+
+    # 6.1、处理缺失值：1、去掉缺失的记录，2、去掉整个属性，3、进行赋值（0、平均值、中位数等）
+    # housing.dropna(subset=['total_bedrooms'])  # 1
+    # housing.drop('total_bedrooms', axis=1)  # 2
+    # median = housing['total_bedrooms'].median()
+    # housing['total_bedrooms'].fillna(median, inplace=True)  # 3
+
+    # 自定义转换器：sklearn是鸭子类型的（而不是继承），需要依次执行fit、transform和fit_transform方法
+    # sklearn提供Imputer类来处理缺失值
+    housing_num = housing.drop('ocean_proximity', axis=1)  # 只有数值属性才有中位数
+    imputer = Imputer(strategy='median')  # imputer.statistics_属性与housing_num.median().values结果一致
+    imputer.fit(housing_num)  # 将imputer实例拟合到训练数据
+    x = imputer.transform(housing_num)  # 将imputer应用到每个属性，结果为Numpy数组
+    housing_tr = pd.DataFrame(x, columns=housing_num.columns)  # 转换完成
+
+    # 6.2、处理文本和类别属性：ocean_proximity
+    housing_cat = housing['ocean_proximity']
+
+    # 将文本属性转换为数值
+    encoder = LabelEncoder()  # 属性映射在encoder.classes_属性中
+    # housing_cat_encoded = encoder.fit_transform(housing_cat)  # 译注：该转换器只能用来转换标签
+    housing_cat_encoded, housing_categories = housing_cat.factorize()
+    # print(housing_cat_encoded[:10])  # 转换后结果
+
+    # 这种做法的问题是，ML 算法会认为两个临近的值比两个疏远的值要更相似。显然这样不对（比如，分类 0 和 4 比 0 和 1 更相似）
+    # 要解决这个问题，一个常见的方法是给每个分类创建一个二元属性：独热编码（One-Hot Encoding），只有一个属性会等于 1（热），其余会是 0（冷）
+    encoder = OneHotEncoder()
+    housing_cat_1hot = encoder.fit_transform(housing_cat_encoded.reshape(-1, 1))  # reshape行转列，结果是一个稀疏矩阵，只存放非零元素的位置
+    # print(housing_cat_1hot.toarray()[:10])  # 复原为密集数组
+
+    # 将以上两步合并（LabelEncoder + OneHotEncoder）
+    encoder = LabelBinarizer()
+    housing_cat_1hot = encoder.fit_transform(housing_cat)
+    # print(housing_cat_1hot)  # 默认返回密集数组，设置sparse_output=True可得到一个稀疏矩阵
+
+    # 6.3、特征缩放：让所有的属性有相同的量度
+    # 方法1：线性函数归一化（Min-Max scaling）：值被转变、重新缩放，直到范围变成 0 到 1，转换器MinMaxScaler
+    # 方法2：标准化（standardization）：首先减去平均值（所以标准化值的平均值总是 0），然后除以方差，使得到的分布具有单位方差，转换器StandardScaler
+
+    # 许多数据转换步骤，需要按一定的顺序执行，sklearn提供了类Pipeline（转换流水线）来完成
+    # 调用流水线的fit方法，就会对所有转换器顺序调用fit_transform方法，将每次调用的输出作为参数传递给下一个调用，一直到最后一个估计器，它只执行fit方法
+    num_attribs = list(housing_num)
+    cat_attribs = ['ocean_proximity']
+
+    # 处理缺失值
+    num_pipeline = Pipeline([
+        ('selector', DataFrameSelector(num_attribs)),
+        ('imputer', Imputer(strategy='median')),
+        ('attribs_adder', CombinedAttributesAdder()),
+        ('std_scaler', StandardScaler())
+    ])
+
+    # housing_num_tr = num_pipeline.fit_transform(housing_num)  # 单独运行流水线
+
+    # 处理类别属性
+    cat_pipeline = Pipeline([
+        ('selector', DataFrameSelector(cat_attribs)),
+        ('label_binarizer', LabelBinarizer())
+    ])
+
+    full_pipeline = FeatureUnion(transformer_list=[
+        ('num_pipeline', num_pipeline),
+        ('cat_pipeline', cat_pipeline)
+    ])
+
+    housing_prepared = full_pipeline.fit_transform(housing)  # 运行整个流水线
+    return housing_prepared
+
+
 if __name__ == '__main__':
 
     pd.set_option('display.max_columns', 20)  # 最大列数
@@ -168,11 +286,9 @@ if __name__ == '__main__':
     housing = train_set.copy()
 
     # 5、地理数据可视化
-    view_housing_data(housing)
+    # view_housing_data(housing)
 
-    # 6、为机器学习算法准备数据 p60
+    # 6、数据清洗
+    trans_housing_data(housing)
 
-
-
-
-
+    # 7、选择并训练模型 p70
