@@ -12,8 +12,10 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from pandas.plotting import scatter_matrix
 from six.moves import urllib
+import joblib
 from sklearn.model_selection import train_test_split
 from sklearn.model_selection import StratifiedShuffleSplit
+from sklearn.model_selection import cross_val_score
 from sklearn.impute import SimpleImputer as Imputer
 from sklearn.pipeline import Pipeline
 from sklearn.pipeline import FeatureUnion
@@ -21,7 +23,10 @@ from sklearn.preprocessing import LabelEncoder
 from sklearn.preprocessing import OneHotEncoder
 from sklearn.preprocessing import LabelBinarizer
 from sklearn.preprocessing import StandardScaler
-
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.ensemble import RandomForestRegressor
 from sklearn.base import BaseEstimator, TransformerMixin
 
 # 全局变量，大写，函数内变量小写
@@ -31,7 +36,7 @@ HOUSING_URL = DOWNLOAD_ROOT + HOUSING_PATH + '/housing.tgz'
 
 
 # 下载数据
-def fetching_housing_data(housing_url=HOUSING_URL, housing_path=HOUSING_PATH):
+def fetch_housing_data(housing_url=HOUSING_URL, housing_path=HOUSING_PATH):
     if not os.path.isdir(housing_path):
         os.makedirs(housing_path)
     tgz_path = os.path.join(housing_path, 'housing.tgz')
@@ -189,10 +194,10 @@ class DataFrameSelector(BaseEstimator, TransformerMixin):
 
 
 # 数据清洗
+# 参考：https://blog.csdn.net/weixin_41571493/article/details/82714759
 def trans_housing_data(housing):
     # 6.0、将预测值和标签分开
     housing = housing.drop('median_house_value', axis=1)  # drop和fillna等函数中设置inplace=True在原数据上修改，不设置默认不修改，需要赋值给其他变量
-    housing_labels = train_set['median_house_value'].copy()
 
     # 6.1、处理缺失值：1、去掉缺失的记录，2、去掉整个属性，3、进行赋值（0、平均值、中位数等）
     # housing.dropna(subset=['total_bedrooms'])  # 1
@@ -206,16 +211,18 @@ def trans_housing_data(housing):
     imputer = Imputer(strategy='median')  # imputer.statistics_属性与housing_num.median().values结果一致
     imputer.fit(housing_num)  # 将imputer实例拟合到训练数据
     x = imputer.transform(housing_num)  # 将imputer应用到每个属性，结果为Numpy数组
-    housing_tr = pd.DataFrame(x, columns=housing_num.columns)  # 转换完成
+    housing_tr = pd.DataFrame(x, columns=housing_num.columns)
+    # print(housing_tr.describe())  # 缺失值补充完成，全部列都非空
 
     # 6.2、处理文本和类别属性：ocean_proximity
     housing_cat = housing['ocean_proximity']
 
     # 将文本属性转换为数值
-    encoder = LabelEncoder()  # 属性映射在encoder.classes_属性中
-    # housing_cat_encoded = encoder.fit_transform(housing_cat)  # 译注：该转换器只能用来转换标签
-    housing_cat_encoded, housing_categories = housing_cat.factorize()
-    # print(housing_cat_encoded[:10])  # 转换后结果
+    encoder = LabelEncoder()
+    housing_cat_encoded = encoder.fit_transform(housing_cat)  # 译注：该转换器只能用来转换标签
+    # housing_cat_encoded, housing_categories = housing_cat.factorize()
+    # print(housing_cat_encoded[:20])  # 属性转换为数值完成
+    # print(encoder.classes_)  # 属性映射
 
     # 这种做法的问题是，ML 算法会认为两个临近的值比两个疏远的值要更相似。显然这样不对（比如，分类 0 和 4 比 0 和 1 更相似）
     # 要解决这个问题，一个常见的方法是给每个分类创建一个二元属性：独热编码（One-Hot Encoding），只有一个属性会等于 1（热），其余会是 0（冷）
@@ -258,8 +265,77 @@ def trans_housing_data(housing):
         ('cat_pipeline', cat_pipeline)
     ])
 
-    housing_prepared = full_pipeline.fit_transform(housing)  # 运行整个流水线
+    # housing_prepared = full_pipeline.fit_transform(housing)  # 运行整个流水线，会报错，暂时不使用
+
+    housing_prepared = housing_tr.copy()  # 建立副本，不要修改原来的数据
+    housing_prepared['ocean_proximity'] = housing_cat_encoded  # 合并填充缺失值的结果+类别属性转换为数值的结果
+
     return housing_prepared
+
+
+# 显示模型评分
+def display_scores(scores):
+    print("Scores:", scores)
+    print("Mean:", scores.mean())
+    print("Standard deviation:", scores.std())
+
+
+# 选择并训练模型
+def train_housing_data(housing):
+    # 7.1、线性回归模型
+    housing_labels = train_set['median_house_value'].copy()
+    lin_reg = LinearRegression()
+    lin_reg.fit(housing, housing_labels)  # 训练模型
+
+    # 部分训练集验证
+    some_data = housing.iloc[:5]
+    some_labels = housing_labels[:5]
+    # some_data = full_pipeline.transform(some_data)  # 先将训练集进行处理
+    print(lin_reg.predict(some_data))
+    print(some_labels)  # 将预测值与实际值进行对比
+
+    # 用全部训练集来计算这个回归模型的RMSE
+    housing_predicions = lin_reg.predict(housing)  # 数据拟合
+    lin_mse = mean_squared_error(housing_labels, housing_predicions)  # 计算误差
+    lin_rmse = np.square(lin_mse)
+    print(lin_rmse)  # 线性回归模型的预测误差非常大
+
+    # 7.2、决策树模型：可以发现数据中复杂的非线性关系
+    tree_reg = DecisionTreeRegressor()
+    tree_reg.fit(housing, housing_labels)  # 训练模型
+
+    housing_predicions = tree_reg.predict(housing)
+    tree_mse = mean_squared_error(housing_labels, housing_predicions)
+    tree_rmse = np.square(tree_mse)
+    print(tree_rmse)  # 决策树模型，没有误差？
+
+    # 7.3、随机森林模型：通过用特征的随机子集训练许多决策树
+    forest_reg = RandomForestRegressor()
+    forest_reg.fit(housing, housing_labels)  # 训练模型
+
+    housing_predicions = forest_reg.predict(housing)
+    forest_mse = mean_squared_error(housing_labels, housing_predicions)
+    forest_rmse = np.square(forest_mse)
+    print(forest_rmse)
+
+    # 使用交叉验证做更佳的评估
+    # 随机地将训练集分成十个不同的子集，成为“折”，然后训练评估决策树模型 10 次，每次选一个不用的折来做评估，用其它 9 个来做训练
+    # 结果是一个包含10 个评分的数组
+    lin_scores = cross_val_score(lin_reg, housing, housing_labels, scoring='neg_mean_squared_error', cv=10)
+    lin_rmse_scores = np.square(-lin_scores)
+    display_scores(lin_rmse_scores)
+
+    tree_scores = cross_val_score(tree_reg, housing, housing_labels, scoring='neg_mean_squared_error', cv=10)
+    tree_rmse_scores = np.square(-tree_scores)
+    display_scores(tree_rmse_scores)  # 决策树模型过拟合很严重，它的性能比线性回归模型还差
+
+    forest_scores = cross_val_score(tree_reg, housing, housing_labels, scoring='neg_mean_squared_error', cv=10)
+    forest_rmse_scores = np.square(-forest_scores)
+    display_scores(forest_rmse_scores)  # 现在好多了：随机森林看起来很有希望
+
+    # 保存试验过的模型
+    # joblib.dump(my_model, "my_model.pkl")
+    # my_model_loaded = joblib.load("my_model.pkl")
 
 
 if __name__ == '__main__':
@@ -268,7 +344,7 @@ if __name__ == '__main__':
     pd.set_option('display.width', 1000)  # 总宽度（字符数）
 
     # 1、获取数据
-    # fetching_housing_data()
+    # fetch_housing_data()
 
     # 2、加载数据
     housing = load_housing_data()
@@ -289,6 +365,8 @@ if __name__ == '__main__':
     # view_housing_data(housing)
 
     # 6、数据清洗
-    trans_housing_data(housing)
+    housing = trans_housing_data(housing)
 
-    # 7、选择并训练模型 p70
+    # 7、选择并训练模型
+    train_housing_data(housing)
+
